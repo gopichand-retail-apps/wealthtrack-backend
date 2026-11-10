@@ -1,0 +1,531 @@
+openapi: 3.1.0
+info:
+  title: WealthTrack API
+  version: 1.0.0
+  description: Local synthetic-finance API. Authentication and household ownership are not implemented.
+servers:
+  - url: http://127.0.0.1:5902/api/v1
+    description: Loopback-only local API
+security: []
+paths:
+  /version:
+    get:
+      operationId: getApplicationVersion
+      summary: Read the backend artifact version
+      responses:
+        '200':
+          description: API service name and SemVer release from the package manifest.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [service, version]
+                    properties:
+                      service: { type: string, const: wealthtrack-api }
+                      version: { type: string, pattern: '^\\d+\\.\\d+\\.\\d+$' }
+  /health:
+    get:
+      responses:
+        '200':
+          description: API and local database health.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestId'
+            X-Trace-ID:
+              $ref: '#/components/headers/TraceId'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/HealthData'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /accounts:
+    get:
+      responses:
+        '200':
+          description: Synthetic account metadata and integer-cent balances.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /summary:
+    get:
+      parameters:
+        - in: query
+          name: days
+          description: Reporting period; omitted uses the configured default.
+          schema:
+            type: integer
+            enum: [7, 30, 90]
+            default: 30
+      responses:
+        '200':
+          description: Account balances, cash flow, categories, and recent transactions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/FinanceSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /transactions:
+    get:
+      parameters:
+        - in: query
+          name: days
+          schema: { type: integer, enum: [7, 30, 90] }
+        - in: query
+          name: search
+          schema: { type: string, maxLength: 80 }
+        - in: query
+          name: category
+          schema: { type: string }
+        - in: query
+          name: accountId
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        '200':
+          description: Filtered synthetic transaction rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /budgets:
+    get:
+      responses:
+        '200':
+          description: Monthly limits and aggregate spending.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Budget'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /goals:
+    get:
+      responses:
+        '200':
+          description: Savings goals and progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Goal'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /bills:
+    get:
+      responses:
+        '200':
+          description: Upcoming recurring commitments.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RecurringBill'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /imports/template:
+    get:
+      responses:
+        '200':
+          description: CSV template download with the expected header and sample rows.
+          content:
+            text/csv:
+              schema: { type: string }
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /imports/preview:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [csvText]
+              properties:
+                csvText:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                  description: CSV text, bounded to 65,536 request bytes and 500 data rows by the API.
+      responses:
+        '200':
+          description: Row validation results without persistence.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ImportPreview'
+        '400':
+          description: Invalid CSV request or headers.
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /imports:
+    post:
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+          description: Replays a previously committed batch when the same key is retried.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [csvText]
+              properties:
+                csvText:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                  description: CSV text, bounded to 65,536 request bytes and 500 data rows by the API.
+      responses:
+        '201':
+          description: Imported rows committed transactionally.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ImportResult'
+        '200':
+          description: Existing committed batch returned for an idempotent replay.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ImportResult'
+        '400':
+          description: Invalid request or missing idempotency key.
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          description: Invalid CSV or resulting ledger totals exceed the safe-integer range; no rows are persisted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  headers:
+    RequestId:
+      description: Server-generated correlation ID for this request.
+      schema: { type: string }
+    TraceId:
+      description: Trace ID extracted from traceparent or generated by the API.
+      schema: { type: string, pattern: '^[a-f0-9]{32}$' }
+    RetryAfter:
+      description: Seconds to wait before retrying.
+      schema: { type: integer, minimum: 1 }
+  responses:
+    BadRequest:
+      description: Request input or query filters are invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Request origin is not in the configured allowlist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Requested route or account was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    PayloadTooLarge:
+      description: Request body exceeds the configured byte limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RateLimited:
+      description: API request rate limit was exceeded.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
+            details:
+              type: array
+              items:
+                $ref: '#/components/schemas/ImportIssue'
+    HealthData:
+      type: object
+      required: [status, service, storage]
+      properties:
+        status: { type: string, const: ok }
+        service: { type: string, const: wealthtrack-api }
+        storage: { type: string, const: sqlite }
+    Account:
+      type: object
+      required: [id, name, type, currency, openingBalanceCents, balanceCents]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        openingBalanceCents: { type: integer }
+        balanceCents: { type: integer }
+    Transaction:
+      type: object
+      required:
+        [
+          id,
+          date,
+          description,
+          category,
+          accountId,
+          amountCents,
+          currency,
+          source,
+        ]
+      properties:
+        id: { type: string }
+        date: { type: string, format: date-time }
+        description: { type: string }
+        category: { type: string }
+        accountId: { type: string }
+        amountCents: { type: integer }
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        source: { type: string, enum: [seed, csv] }
+    FinanceSummary:
+      type: object
+      required:
+        [
+          periodDays,
+          cashPositionCents,
+          incomeCents,
+          spendingCents,
+          netCashFlowCents,
+          savingsRatePct,
+          accounts,
+          series,
+          categories,
+          transactions,
+        ]
+      properties:
+        periodDays: { type: integer, enum: [7, 30, 90] }
+        cashPositionCents: { type: integer }
+        incomeCents: { type: integer }
+        spendingCents: { type: integer }
+        netCashFlowCents: { type: integer }
+        savingsRatePct: { type: number }
+        accounts:
+          type: array
+          items: { $ref: '#/components/schemas/Account' }
+        series:
+          type: array
+          items:
+            type: object
+            required: [date, amountCents]
+            properties:
+              date: { type: string, format: date }
+              amountCents: { type: integer }
+        categories:
+          type: array
+          items:
+            type: object
+            required: [id, amountCents]
+            properties:
+              id: { type: string }
+              amountCents: { type: integer }
+        transactions:
+          type: array
+          items: { $ref: '#/components/schemas/Transaction' }
+    Budget:
+      type: object
+      required: [id, categoryId, limitCents, spentCents, remainingCents]
+      properties:
+        id: { type: string }
+        categoryId: { type: string }
+        limitCents: { type: integer }
+        spentCents: { type: integer }
+        remainingCents: { type: integer }
+    Goal:
+      type: object
+      required: [id, name, savedCents, targetCents, targetDate]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        savedCents: { type: integer }
+        targetCents: { type: integer }
+        targetDate: { type: string, format: date }
+    RecurringBill:
+      type: object
+      required: [id, name, categoryId, amountCents, accountId, cadence, nextDue]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        categoryId: { type: string }
+        amountCents: { type: integer }
+        accountId: { type: string }
+        cadence: { type: string }
+        nextDue: { type: string, format: date }
+    ImportPreviewRow:
+      type: object
+      required: [date, description, category, accountId, amountCents, currency]
+      properties:
+        date: { type: string, format: date }
+        description: { type: string }
+        category: { type: string }
+        accountId: { type: string }
+        amountCents: { type: integer }
+        currency: { type: string }
+    ImportIssue:
+      type: object
+      required: [rowNumber, code]
+      properties:
+        rowNumber: { type: integer, minimum: 0 }
+        code:
+          type: string
+          enum:
+            [
+              invalidRow,
+              invalidDate,
+              invalidAmount,
+              invalidCategory,
+              invalidAccount,
+              invalidCurrency,
+              amountSign,
+              payloadTooLarge,
+              invalidCsv,
+              invalidHeaders,
+              emptyFile,
+              tooManyRows,
+              aggregateAmount,
+            ]
+    ImportPreview:
+      type: object
+      required:
+        [validRows, invalidRows, validCount, invalidCount, netAmountCents]
+      properties:
+        validRows:
+          type: array
+          items: { $ref: '#/components/schemas/ImportPreviewRow' }
+        invalidRows:
+          type: array
+          items: { $ref: '#/components/schemas/ImportIssue' }
+        validCount: { type: integer, minimum: 0 }
+        invalidCount: { type: integer, minimum: 0 }
+        netAmountCents: { type: integer }
+    ImportResult:
+      type: object
+      required: [idempotencyKey, importedAt, rowsAdded, totalNetCents, replayed]
+      properties:
+        idempotencyKey: { type: string }
+        importedAt: { type: string, format: date-time }
+        rowsAdded: { type: integer, minimum: 0 }
+        totalNetCents: { type: integer }
+        replayed: { type: boolean }
