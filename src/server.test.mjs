@@ -38,7 +38,10 @@ test('version reports the backend package release', async (t) => {
   const result = await response.json();
 
   assert.equal(response.status, 200);
-  assert.deepEqual(result.data, { service: 'wealthtrack-api', version: '1.0.0' });
+  assert.deepEqual(result.data, {
+    service: 'wealthtrack-api',
+    version: '1.0.0',
+  });
 });
 
 test('summary and transaction routes reject unsupported reporting periods', async (t) => {
