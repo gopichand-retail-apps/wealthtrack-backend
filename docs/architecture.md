@@ -198,16 +198,17 @@ sequenceDiagram
   participant DB as SQLite
   Planner->>UI: Confirm a clean preview
   UI->>API: POST /imports with Idempotency-Key
-  API->>API: Revalidate complete CSV
+  API->>API: Revalidate complete CSV and digest the normalized rows
   API->>DB: BEGIN IMMEDIATE
-  API->>DB: Insert transactions, batch, aggregate event
+  API->>DB: Same key already stored? Compare digests
+  API->>DB: Insert transactions, batch with digest, aggregate event
   API->>DB: COMMIT
   DB-->>API: Commit result
-  API-->>UI: rowsAdded, totalNetCents, replayed
+  API-->>UI: rowsAdded, totalNetCents, replayed (or 409 on a changed file)
   UI-->>Planner: Success and refreshed data
 ```
 
-**Precondition:** preview has no invalid rows and at least one valid row. **Success:** all records and the batch commit atomically. **Failure/recovery:** invalid data is rejected without writes; retrying the same key is idempotent. No user/tenant key is accepted because authentication is not implemented.
+**Precondition:** preview has no invalid rows and at least one valid row. **Success:** all records and the batch commit atomically. **Failure/recovery:** invalid data is rejected without writes. Retrying the same key with the same content returns the one earlier batch (`replayed: true`). The same key with different content returns `409 IDEMPOTENCY_KEY_REUSED` and writes nothing; the earlier batch is unchanged. Content is the validated, normalized rows in file order (SHA-256 over date, description, category, account, amount in cents, currency), so spacing and line-ending changes still count as the same file. The digest is stored on the batch and never returned. A batch committed before digests existed has no digest, so a retry under its key replays without a comparison. No user/tenant key is accepted because authentication is not implemented.
 
 #### 7. Review budgets
 
@@ -327,8 +328,10 @@ erDiagram
   }
   IMPORT_BATCHES {
     text idempotency_key PK
+    text imported_at
     integer rows_added
     integer total_net_cents
+    text payload_digest "nullable; null for batches that predate digests"
   }
   ACTIVITY_EVENTS {
     text id PK
@@ -364,7 +367,7 @@ dataset. There are no users, owner IDs, roles, or catalog-editor routes.
 | `GET /accounts`, `/summary`, `/transactions`, `/budgets`, `/goals`, `/bills` | No identity or household filter. Period/category/account/filter values are server-validated. | Reads API-owned synthetic SQLite data.                                                                          | `INVALID_PERIOD`, `INVALID_FILTER`, `INVALID_CATEGORY`, `ACCOUNT_NOT_FOUND`, `RATE_LIMITED`, or safe `INTERNAL_ERROR`.        |
 | `GET /imports/template`                                                      | No identity; local origin allowlist if `Origin` is present.                                  | No database read/write; downloads model-configured synthetic examples.                                          | `ORIGIN_NOT_ALLOWED`, `RATE_LIMITED`, or safe error.                                                                          |
 | `POST /imports/preview`                                                      | No identity; bounded strict JSON body and CSV validation.                                    | Reads model/known accounts; never writes.                                                                       | `INVALID_JSON`, `PAYLOAD_TOO_LARGE`, row-level validation issues, or safe API error.                                          |
-| `POST /imports`                                                              | No identity; requires syntactically valid `Idempotency-Key` and strict bounded body.         | Validates ownership-independent synthetic rows, then atomically writes rows, import batch, and aggregate event. | `IDEMPOTENCY_KEY_REQUIRED`, `INVALID_CSV`, `RATE_LIMITED`, or safe API error. Same-key retries replay without duplicate rows. |
+| `POST /imports`                                                              | No identity; requires syntactically valid `Idempotency-Key` and strict bounded body.         | Validates ownership-independent synthetic rows, then atomically writes rows, import batch, and aggregate event. | `IDEMPOTENCY_KEY_REQUIRED`, `IDEMPOTENCY_KEY_REUSED` (409, same key with different content), `INVALID_CSV`, `RATE_LIMITED`, or safe API error. Same-key retries with the same content replay without duplicate rows. |
 
 Unknown routes return `NOT_FOUND`; the API does not expose a caller-supplied
 profile or role.
@@ -421,9 +424,15 @@ CI configuration is listed in section 3. Run the configured checks before mergin
   text is parsed exactly, not through binary floating-point conversion.
 - CSV preview is read-only. Commit revalidates the entire file and atomically
   writes transaction rows, an import batch, and an aggregate activity event.
-  `Idempotency-Key` makes a retry of the same committed batch replay-safe.
+  `Idempotency-Key` makes a retry of the same committed batch replay-safe, and
+  a stored content digest turns a reused key with different content into a 409
+  instead of a silent replay. The comparison runs inside the write transaction,
+  so two concurrent requests under one key cannot both commit.
 - New seed rows use `INSERT OR IGNORE`; this does not migrate changed seed data
   into an existing SQLite file. There is no versioned schema migration system.
+  The one additive exception is `upgradeSchema` in the repository: on open it
+  adds the nullable `import_batches.payload_digest` column to a database created
+  before that column existed, and does nothing when the column is present.
 - The browser persists only the non-sensitive theme preference. No account,
   transaction, CSV, balance, or identity state is kept in localStorage.
 

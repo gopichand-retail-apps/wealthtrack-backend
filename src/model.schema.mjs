@@ -7,6 +7,7 @@ const messagesSchema = z
       .object({
         invalidRequest: z.string().min(1),
         invalidCsv: z.string().min(1),
+        idempotencyKeyReused: z.string().min(1),
         payloadTooLarge: z.string().min(1),
         originNotAllowed: z.string().min(1),
         notFound: z.string().min(1),

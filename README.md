@@ -40,13 +40,13 @@ The versioned base URL is `http://127.0.0.1:5902/api/v1`. See [`openapi.yaml`](o
 - `GET /health`, `/accounts`, `/summary`, `/transactions`, `/budgets`, `/goals`, `/bills`
 - `GET /imports/template`
 - `POST /imports/preview` validates a CSV without writes.
-- `POST /imports` requires `Idempotency-Key` and commits a valid batch atomically.
+- `POST /imports` requires `Idempotency-Key` and commits a valid batch atomically. The same key with the same content returns the earlier batch (`replayed: true`); the same key with different content returns `409 IDEMPOTENCY_KEY_REUSED` and writes nothing.
 
 JSON success bodies use `{ "data": ... }`; errors use a stable code/message/requestId envelope. Request and trace IDs, safe route metadata, status, duration, and outcome are logged. CSV contents and transaction details are not logged.
 
 ## Data and checks
 
-Money is stored as integer cents with an explicit currency. CSV amounts are parsed from decimal text, not binary floating point. The sum of absolute transaction and opening-balance cents across the existing ledger and incoming batch must stay within JavaScript's safe integer range; unsafe imports are rejected during preview and commit. The repository uses parameterized SQL and explicit transactions. Invalid rows prevent the batch from committing; repeated idempotency keys do not insert duplicate transactions.
+Money is stored as integer cents with an explicit currency. CSV amounts are parsed from decimal text, not binary floating point. The sum of absolute transaction and opening-balance cents across the existing ledger and incoming batch must stay within JavaScript's safe integer range; unsafe imports are rejected during preview and commit. The repository uses parameterized SQL and explicit transactions. Invalid rows prevent the batch from committing; repeated idempotency keys do not insert duplicate transactions. Each batch stores a SHA-256 digest of its validated, normalized rows (never returned or logged) so a reused key with a changed file is rejected. Opening a database created before that column existed adds the nullable `import_batches.payload_digest` column automatically; batches from before the upgrade replay without a comparison.
 
 ```sh
 npm run format:check

@@ -1,5 +1,6 @@
 import { parse } from 'csv-parse/sync';
 import { z } from 'zod';
+import { digestRows, resolveReplay } from './import.digest.mjs';
 
 const csvRowSchema = z
   .object({
@@ -119,17 +120,27 @@ function aggregateIsSafe(validRows, repository) {
   );
 }
 
-function parseCsv(csvText, model, repository, accountIds) {
+function normalizeCsv(csvText, model, accountIds) {
   const parsedFile = readCsvRecords(csvText, model);
   if (parsedFile.issue) {
     return { validRows: [], invalidRows: [parsedFile.issue] };
   }
-  const result = validateCsvRows(
+  return validateCsvRows(
     parsedFile.headers,
     parsedFile.rows,
     model,
     accountIds,
   );
+}
+
+function parseCsv(csvText, model, repository, accountIds) {
+  return withAggregateCheck(
+    normalizeCsv(csvText, model, accountIds),
+    repository,
+  );
+}
+
+function withAggregateCheck(result, repository) {
   if (!aggregateIsSafe(result.validRows, repository)) {
     return {
       validRows: [],
@@ -170,9 +181,14 @@ function createPreview(csvText, model, repository, accountIds) {
 }
 
 function commitCsv(csvText, idempotencyKey, model, repository, accountIds) {
+  const normalized = normalizeCsv(csvText, model, accountIds);
+  const digest =
+    normalized.invalidRows.length === 0
+      ? digestRows(normalized.validRows)
+      : null;
   const existing = repository.getImportBatch(idempotencyKey);
-  if (existing) return { ...existing, replayed: true };
-  const result = parseCsv(csvText, model, repository, accountIds);
+  if (existing) return resolveReplay(existing, digest);
+  const result = withAggregateCheck(normalized, repository);
   if (result.invalidRows.length > 0) {
     return {
       invalidRows: result.invalidRows,
@@ -183,6 +199,7 @@ function commitCsv(csvText, idempotencyKey, model, repository, accountIds) {
   const imported = repository.importTransactions(
     idempotencyKey,
     result.validRows,
+    digest,
   );
   if (imported.rejected) {
     return {

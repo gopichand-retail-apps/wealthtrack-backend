@@ -37,6 +37,16 @@ test('rejects a wrong app ID, missing data, and an architecture payload', () => 
   assert.throws(() => parseWealthTrackModel(architecturePayload));
 });
 
+test('requires a message for a reused import key', () => {
+  const missingMessage = structuredClone(envelope);
+  Reflect.deleteProperty(
+    missingMessage.messages.errors,
+    'idempotencyKeyReused',
+  );
+
+  assert.throws(() => parseWealthTrackModel(missingMessage));
+});
+
 test('rejects invalid nested money and configuration values', () => {
   const invalidSeed = structuredClone(envelope);
   invalidSeed.data.seed.transactions[0].amountCents = 1.5;
