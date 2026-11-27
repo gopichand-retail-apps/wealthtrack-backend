@@ -3,6 +3,10 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { createApiServer, loadModel } from './server.mjs';
 
+// Keep imported rows inside the 30-day reporting window on whatever day the suite runs.
+const isoDaysAgo = (days) =>
+  new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+
 async function startTestServer(t) {
   const api = createApiServer({ databasePath: ':memory:' });
   api.server.listen(0, '127.0.0.1');
@@ -27,8 +31,8 @@ async function importedRows(url) {
 }
 
 const header = 'date,description,category,account,amount,currency';
-const firstCsv = `${header}\n2026-10-28,Market groceries,groceries,checking,-64.18,USD`;
-const changedCsv = `${header}\n2026-10-28,Market groceries,groceries,checking,-65.18,USD`;
+const firstCsv = `${header}\n${isoDaysAgo(2)},Market groceries,groceries,checking,-64.18,USD`;
+const changedCsv = `${header}\n${isoDaysAgo(2)},Market groceries,groceries,checking,-65.18,USD`;
 
 test('reusing an import key for different content returns 409 and keeps the first batch', async (t) => {
   const url = await startTestServer(t);
@@ -72,8 +76,8 @@ test('an invalid preview or commit writes zero rows', async (t) => {
   const url = await startTestServer(t);
   const invalidCsv = [
     header,
-    '2026-10-28,Bad amount,dining,checking,3.456,USD',
-    '2026-10-29,Fine row,groceries,checking,-1.00,USD',
+    `${isoDaysAgo(2)},Bad amount,dining,checking,3.456,USD`,
+    `${isoDaysAgo(1)},Fine row,groceries,checking,-1.00,USD`,
   ].join('\n');
 
   const preview = await fetch(`${url}/api/v1/imports/preview`, {
