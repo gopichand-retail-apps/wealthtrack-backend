@@ -240,6 +240,14 @@ async function handleImportCommit({ model, imports, request, requestId }) {
     );
   }
   const result = imports.commit(parsed.data.csvText, key);
+  if (result.conflict) {
+    return errorEnvelope(
+      409,
+      'IDEMPOTENCY_KEY_REUSED',
+      model.copy.errors.idempotencyKeyReused,
+      requestId,
+    );
+  }
   if (result.invalidCount > 0) {
     return errorEnvelope(
       422,

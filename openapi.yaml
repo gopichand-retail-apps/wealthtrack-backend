@@ -249,7 +249,11 @@ paths:
           name: Idempotency-Key
           required: true
           schema: { type: string, minLength: 1, maxLength: 128 }
-          description: Replays a previously committed batch when the same key is retried.
+          description: >-
+            Replays the previously committed batch when the same key is retried with the same
+            content. The same key with different content returns 409 and writes nothing. Content is
+            compared as validated, normalized rows in file order, so spacing and line endings do not
+            matter. A batch committed before content digests existed replays without a comparison.
       requestBody:
         required: true
         content:
@@ -290,6 +294,14 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          description: >-
+            The Idempotency-Key was already used for different content (error code
+            IDEMPOTENCY_KEY_REUSED). No rows are persisted and the earlier batch is unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':

@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS import_batches (
   idempotency_key TEXT PRIMARY KEY,
   imported_at TEXT NOT NULL,
   rows_added INTEGER NOT NULL,
-  total_net_cents INTEGER NOT NULL
+  total_net_cents INTEGER NOT NULL,
+  payload_digest TEXT
 );
 
 CREATE TABLE IF NOT EXISTS activity_events (

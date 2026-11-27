@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { resolveReplay } from './import.digest.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const maximumSafeCents = BigInt(Number.MAX_SAFE_INTEGER);
@@ -61,12 +62,28 @@ export function createFinanceRepository({
   const database = new DatabaseSync(databasePath);
   try {
     database.exec(readFileSync(schemaUrl, 'utf8'));
+    upgradeSchema(database);
     seedDatabase(database, model, now);
   } catch (error) {
     database.close();
     throw error;
   }
   return createRepository(database);
+}
+
+/**
+ * Brings a database created by an earlier release up to the current schema.
+ * `schema.sql` only creates missing tables, so a column added later needs an
+ * explicit, additive step. The step is safe to repeat.
+ */
+export function upgradeSchema(database) {
+  const hasDigestColumn = database
+    .prepare('PRAGMA table_info(import_batches)')
+    .all()
+    .some((column) => column.name === 'payload_digest');
+  if (!hasDigestColumn) {
+    database.exec('ALTER TABLE import_batches ADD COLUMN payload_digest TEXT');
+  }
 }
 
 function createRepository(database) {
@@ -80,7 +97,8 @@ function createRepository(database) {
     getImportBatch: (key) => getImportBatch(database, key),
     getSummary: (days, now) => getSummary(database, days, now),
     getTransactions: (filters) => getTransactions(database, filters),
-    importTransactions: (key, rows) => importTransactions(database, key, rows),
+    importTransactions: (key, rows, digest) =>
+      importTransactions(database, key, rows, digest),
   };
 }
 
@@ -415,7 +433,8 @@ function getImportBatch(database, idempotencyKey) {
     .prepare(
       `
     SELECT idempotency_key AS idempotencyKey, imported_at AS importedAt,
-      rows_added AS rowsAdded, total_net_cents AS totalNetCents
+      rows_added AS rowsAdded, total_net_cents AS totalNetCents,
+      payload_digest AS payloadDigest
     FROM import_batches WHERE idempotency_key = ?
   `,
     )
@@ -453,16 +472,16 @@ function canImportTransactions(database, rows) {
   return existingCents + openingCents + incomingCents <= maximumSafeCents;
 }
 
-function importTransactions(database, idempotencyKey, rows) {
+function importTransactions(database, idempotencyKey, rows, digest = null) {
   return transaction(database, () => {
     const existing = getImportBatch(database, idempotencyKey);
-    if (existing) return { ...existing, replayed: true };
+    if (existing) return resolveReplay(existing, digest);
     if (!canImportTransactions(database, rows)) return { rejected: true };
-    return commitImportBatch(database, idempotencyKey, rows);
+    return commitImportBatch(database, idempotencyKey, rows, digest);
   });
 }
 
-function commitImportBatch(database, idempotencyKey, rows) {
+function commitImportBatch(database, idempotencyKey, rows, digest) {
   const importedAt = new Date().toISOString();
   const totalNetCents = rows.reduce((total, row) => total + row.amountCents, 0);
   insertImportedTransactions(database, rows);
@@ -472,6 +491,7 @@ function commitImportBatch(database, idempotencyKey, rows) {
     importedAt,
     rows.length,
     totalNetCents,
+    digest,
   );
   insertActivityEvent(database, 'transactions.imported', importedAt);
   return {
@@ -508,15 +528,17 @@ function insertImportBatch(
   importedAt,
   rowsAdded,
   totalNetCents,
+  digest,
 ) {
   database
     .prepare(
       `
-    INSERT INTO import_batches (idempotency_key, imported_at, rows_added, total_net_cents)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO import_batches
+      (idempotency_key, imported_at, rows_added, total_net_cents, payload_digest)
+    VALUES (?, ?, ?, ?, ?)
   `,
     )
-    .run(key, importedAt, rowsAdded, totalNetCents);
+    .run(key, importedAt, rowsAdded, totalNetCents, digest);
 }
 
 function insertActivityEvent(database, eventName, occurredAt) {

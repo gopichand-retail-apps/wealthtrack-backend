@@ -180,6 +180,118 @@ test('invalid headers and empty input are rejected without partial rows', (t) =>
   );
 });
 
+function createImportWithRepository(t) {
+  const model = loadModel();
+  const repository = createFinanceRepository({
+    databasePath: ':memory:',
+    model,
+  });
+  t.after(() => repository.close());
+  return { imports: createImportService({ model, repository }), repository };
+}
+
+function importedRowCount(repository) {
+  return repository
+    .getTransactions({
+      from: '2000-01-01T00:00:00.000Z',
+      to: '2100-01-01T00:00:00.000Z',
+      limit: 500,
+    })
+    .filter((row) => row.source === 'csv').length;
+}
+
+const changedCsv = [
+  'date,description,category,account,amount,currency',
+  '2026-10-30,Different purchase,dining,checking,-12.00,USD',
+].join('\n');
+
+test('a reused key with different content is a conflict and writes nothing', (t) => {
+  const { imports, repository } = createImportWithRepository(t);
+
+  const first = imports.commit(validCsv, 'reused-key');
+  const second = imports.commit(changedCsv, 'reused-key');
+
+  assert.equal(first.rowsAdded, 2);
+  assert.equal(second.conflict, true);
+  assert.equal(second.replayed, undefined);
+  assert.equal(importedRowCount(repository), 2);
+});
+
+test('the same content under the same key replays the one earlier batch', (t) => {
+  const { imports, repository } = createImportWithRepository(t);
+
+  const first = imports.commit(validCsv, 'same-key');
+  const replay = imports.commit(validCsv, 'same-key');
+
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.importedAt, first.importedAt);
+  assert.equal(replay.rowsAdded, 2);
+  assert.equal(replay.totalNetCents, first.totalNetCents);
+  assert.equal(Object.hasOwn(replay, 'payloadDigest'), false);
+  assert.equal(importedRowCount(repository), 2);
+});
+
+test('spacing and line endings do not change the content under a key', (t) => {
+  const { imports, repository } = createImportWithRepository(t);
+  const respaced = [
+    'date,description,category,account,amount,currency',
+    '2026-10-28, Market groceries ,groceries,checking, -64.18 ,USD',
+    '2026-10-29,Payroll deposit,income,checking,2400.00,USD',
+  ].join('\r\n');
+
+  imports.commit(validCsv, 'respaced-key');
+  const replay = imports.commit(respaced, 'respaced-key');
+
+  assert.equal(replay.replayed, true);
+  assert.equal(importedRowCount(repository), 2);
+});
+
+test('a reused key with an invalid file is a conflict, not a replay', (t) => {
+  const { imports, repository } = createImportWithRepository(t);
+
+  imports.commit(validCsv, 'invalid-reuse-key');
+  const result = imports.commit('date,description\n1,2', 'invalid-reuse-key');
+
+  assert.equal(result.conflict, true);
+  assert.equal(importedRowCount(repository), 2);
+});
+
+test('a replay still answers after later imports used the ledger headroom', (t) => {
+  const { imports } = createImportWithRepository(t);
+  const csv = [
+    'date,description,category,account,amount,currency',
+    '2026-10-28,Large entry,groceries,checking,-45035996273704.96,USD',
+  ].join('\n');
+
+  imports.commit(csv, 'headroom-one');
+  const rejected = imports.commit(csv, 'headroom-two');
+  const replay = imports.commit(csv, 'headroom-one');
+
+  assert.equal(rejected.invalidCount, 1);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.rowsAdded, 1);
+});
+
+test('a batch stored before digests existed replays without a comparison', (t) => {
+  const { imports, repository } = createImportWithRepository(t);
+  repository.importTransactions('legacy-key', [
+    {
+      date: '2026-10-28',
+      description: 'Earlier import',
+      category: 'groceries',
+      accountId: 'checking',
+      amountCents: -500,
+      currency: 'USD',
+    },
+  ]);
+
+  const result = imports.commit(validCsv, 'legacy-key');
+
+  assert.equal(result.replayed, true);
+  assert.equal(result.rowsAdded, 1);
+  assert.equal(importedRowCount(repository), 1);
+});
+
 test('reports malformed CSV syntax and row-limit violations', (t) => {
   const imports = createImport(t);
   const model = loadModel();
