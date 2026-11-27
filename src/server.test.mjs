@@ -3,6 +3,10 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { createApiServer, loadModel } from './server.mjs';
 
+// Keep imported rows inside the 30-day reporting window on whatever day the suite runs.
+const isoDaysAgo = (days) =>
+  new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+
 async function startTestServer(t, model = loadModel()) {
   const api = createApiServer({ databasePath: ':memory:', model });
   api.server.listen(0, '127.0.0.1');
@@ -180,7 +184,7 @@ test('CSV preview and commit are validated and idempotent', async (t) => {
   const { url } = await startTestServer(t);
   const csvText = [
     'date,description,category,account,amount,currency',
-    '2026-10-28,Market groceries,groceries,checking,-64.18,USD',
+    `${isoDaysAgo(2)},Market groceries,groceries,checking,-64.18,USD`,
   ].join('\n');
   const previewResponse = await fetch(`${url}/api/v1/imports/preview`, {
     method: 'POST',
@@ -248,7 +252,7 @@ test('invalid CSV does not commit any rows', async (t) => {
   const { url } = await startTestServer(t);
   const csvText = [
     'date,description,category,account,amount,currency',
-    '2026-10-28,Invalid amount,dining,checking,3.456,USD',
+    `${isoDaysAgo(2)},Invalid amount,dining,checking,3.456,USD`,
   ].join('\n');
   const response = await fetch(`${url}/api/v1/imports`, {
     method: 'POST',
@@ -275,8 +279,8 @@ test('unsafe aggregate totals are rejected without committing rows', async (t) =
   const { url } = await startTestServer(t);
   const csvText = [
     'date,description,category,account,amount,currency',
-    '2026-10-28,Large one,groceries,checking,-90071992547409.91,USD',
-    '2026-10-29,Large two,groceries,checking,-90071992547409.91,USD',
+    `${isoDaysAgo(2)},Large one,groceries,checking,-90071992547409.91,USD`,
+    `${isoDaysAgo(1)},Large two,groceries,checking,-90071992547409.91,USD`,
   ].join('\n');
   const response = await fetch(`${url}/api/v1/imports`, {
     method: 'POST',
@@ -306,7 +310,7 @@ test('cumulative import totals remain within the safe integer range', async (t) 
   const { url } = await startTestServer(t);
   const csvText = [
     'date,description,category,account,amount,currency',
-    '2026-10-28,Large entry,groceries,checking,-45035996273704.96,USD',
+    `${isoDaysAgo(2)},Large entry,groceries,checking,-45035996273704.96,USD`,
   ].join('\n');
   const commit = (idempotencyKey) =>
     fetch(`${url}/api/v1/imports`, {
